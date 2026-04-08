@@ -6,7 +6,7 @@ import os
 
 from htb_agent.system import add_to_hosts
 from htb_agent.recon import perform_full_recon
-from htb_agent.vision import capture_screenshots
+from htb_agent.vision import crawl_text_content
 from htb_agent.llm import analyze_recon, chat_loop
 
 load_dotenv()
@@ -29,19 +29,17 @@ def start(
 
     results = perform_full_recon(ip, domain, wordlist, sub_wordlist)
     
-    screenshot_paths = []
+    crawl_data = []
     http_open = "80/tcp" in results.get("nmap", "") or "443/tcp" in results.get("nmap", "") or "http" in results.get("nmap", "")
     
-    # If concurrent scanning starts before nmap finishes, we still want to grab screenshot.
-    # The http_open heuristic works on the Nmap results output. Since nmap blocks recon completion it's still available here.
     if http_open or (domain and results.get("directories") != "Skipped directory scan."):
         target_url = f"http://{domain}" if domain else f"http://{ip}"
         if "443/tcp" in results.get("nmap", "") and "80/tcp" not in results.get("nmap", ""):
             target_url = f"https://{domain}" if domain else f"https://{ip}"
         
-        screenshot_paths = capture_screenshots(target_url)
+        crawl_data = crawl_text_content(target_url)
         
-    analysis_text = analyze_recon(results, screenshot_paths)
+    analysis_text = analyze_recon(results, crawl_data)
     
     console.print("\n[bold cyan]=== AGENT REPORT ===[/bold cyan]")
     console.print(Markdown(analysis_text))

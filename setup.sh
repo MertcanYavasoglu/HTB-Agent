@@ -83,7 +83,9 @@ fi
 # 4. Prompt for .env configuration
 if [ ! -f ".env" ]; then
     echo "[*] Creating .env config..."
-    read -p "Enter Gemini API Key: " api_key
+    read -p "Enter Ollama Model [qwen2.5-coder:7b]: " ollama_model
+    ollama_model=${ollama_model:-"qwen2.5-coder:7b"}
+    
     read -p "Enter Nmap default args [-sV -sC -p-]: " nmap_args
     nmap_args=${nmap_args:-"-sV -sC -p-"}
 
@@ -103,7 +105,7 @@ if [ ! -f ".env" ]; then
     max_crawl=${max_crawl:-"3"}
 
     cat <<EOF > .env
-GEMINI_API_KEY="$api_key"
+OLLAMA_MODEL="$ollama_model"
 NMAP_DEFAULT_ARGS="$nmap_args"
 WORDLIST_DIRS="$dir_wordlist"
 WORDLIST_SUBDOMAINS="$sub_wordlist"

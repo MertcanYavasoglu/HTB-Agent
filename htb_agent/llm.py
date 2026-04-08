@@ -1,75 +1,74 @@
 import os
-from google import genai
+import ollama
 from rich.console import Console
 from rich.markdown import Markdown
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 console = Console()
 
-def get_gemini_client() -> Optional[genai.Client]:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        console.print("[bold red][X] GEMINI_API_KEY not found in environment.[/bold red]")
-        return None
-    return genai.Client(api_key=api_key)
+def get_ollama_model() -> str:
+    return os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 
-def analyze_recon(results: Dict[str, str], screenshot_paths: list = None) -> str:
-    client = get_gemini_client()
-    if not client: return ""
+def analyze_recon(results: Dict[str, str], crawl_data: List[Dict[str, str]] = None) -> str:
+    model = get_ollama_model()
     
+    # Format crawl data into string
+    extra_web_context = ""
+    if crawl_data:
+        extra_web_context = "\n[WEB CRAWL DATA]\n"
+        for page in crawl_data:
+            extra_web_context += f"--- Page: {page['name']} ({page['url']}) ---\n"
+            extra_web_context += f"Title: {page['title']}\n"
+            extra_web_context += f"Content Snippet: {page['content'][:2000]}...\n" # Limit each page content
+            if page.get('links'):
+                extra_web_context += "Interactive Elements found: " + ", ".join([l['text'] for l in page['links'] if l['text']]) + "\n\n"
+
     prompt = f"""
-You are a Penetration Tester mapping out attack vectors.
-Analyze the following reconnaissance data and provide vulnerabilities, potential exploitation steps, and exact bash commands to run for exploitation.
-Be concise and clear. Format output in Markdown.
+You are an expert Penetration Tester. Analyze the reconnaissance data for a Hack The Box target.
+Provide a summary of vulnerabilities, exploitation steps, and exact bash commands to run.
 
 [NMAP RESULTS]
 {results.get('nmap', 'No nmap data.')}
 
-[DIRECTORY RESULTS]
+[FFUF DIRECTORY RESULTS]
 {results.get('directories', 'No directory data.')}
+
+[FFUF SUBDOMAIN RESULTS]
+{results.get('subdomains', 'No subdomain data.')}
+{extra_web_context}
+
+Be concise, technical, and use Markdown.
 """
     
-    contents = [prompt]
-    
-    if screenshot_paths:
-        console.print(f"[cyan][*] Adding {len(screenshot_paths)} screenshots to LLM context...[/cyan]")
-        try:
-            from google.genai import types
-            for path in screenshot_paths:
-                if os.path.exists(path):
-                    with open(path, "rb") as f:
-                        img_data = f.read()
-                    contents.append(f"Visual evidence ({path}):")
-                    contents.append(
-                        types.Part.from_bytes(data=img_data, mime_type="image/png")
-                    )
-        except Exception as e:
-            console.print(f"[yellow][!] Failed to load screenshot: {e}[/yellow]")
-    
-    console.print("[bold purple][*] Gemini analyzing...[/bold purple]")
+    console.print(f"[bold purple][*] Analyzing with local Ollama ({model})...[/bold purple]")
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents
-        )
-        return response.text
+        response = ollama.chat(model=model, messages=[
+            {'role': 'user', 'content': prompt}
+        ])
+        return response['message']['content']
     except Exception as e:
-        console.print(f"[bold red][X] Gemini API Error: {e}[/bold red]")
+        if "not found" in str(e).lower():
+            console.print(f"[bold red][X] Ollama Model '{model}' not found. Run 'ollama pull {model}' first.[/bold red]")
+        else:
+            console.print(f"[bold red][X] Ollama Error: {e}[/bold red]")
         return str(e)
 
 def chat_loop(initial_context: str):
-    client = get_gemini_client()
-    if not client: return
+    model = get_ollama_model()
     
-    console.print("\n[bold green]=== Interactive Chat Mode ===[/bold green]")
+    console.print("\n[bold green]=== Interactive Chat Mode (Ollama) ===[/bold green]")
     console.print("[italic]Type 'q', 'quit', or 'exit' to leave.[/italic]\n")
     
+    messages = [
+        {'role': 'system', 'content': "You are an expert penetration tester assisting a user with a CTF/HTB target. Be concise and technical."},
+        {'role': 'user', 'content': f"Here is the context for the target:\n{initial_context}"}
+    ]
+    
+    # Try to prime the model
     try:
-        chat = client.chats.create(model='gemini-2.5-flash')
-        system_msg = "You are an expert penetration tester. We are solving a CTF target together."
-        chat.send_message(f"{system_msg}\n\nContext:\n{initial_context}")
+        ollama.chat(model=model, messages=messages)
     except Exception as e:
-        console.print(f"[bold red][X] Chat failed to start: {e}[/bold red]")
+        console.print(f"[bold red][X] Failed to connect to Ollama: {e}[/bold red]")
         return
         
     while True:
@@ -78,9 +77,17 @@ def chat_loop(initial_context: str):
             if user_input.strip().lower() in ['q', 'quit', 'exit']:
                 break
             
-            response = chat.send_message(user_input)
+            messages.append({'role': 'user', 'content': user_input})
+            
+            # Show a thinking indicator? Ollama is local and can take time.
+            with console.status(f"[bold cyan]Ollama ({model}) is thinking...[/bold cyan]"):
+                response = ollama.chat(model=model, messages=messages)
+            
+            assistant_msg = response['message']['content']
+            messages.append({'role': 'assistant', 'content': assistant_msg})
+            
             console.print("\n[bold purple]Agent >[/bold purple]")
-            console.print(Markdown(response.text))
+            console.print(Markdown(assistant_msg))
             console.print("")
         except (KeyboardInterrupt, EOFError):
             break

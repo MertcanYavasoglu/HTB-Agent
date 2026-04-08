@@ -1,16 +1,15 @@
 import os
+from typing import List, Dict
 from rich.console import Console
 from playwright.sync_api import sync_playwright
 
 console = Console()
 
-from typing import List
-
-def capture_screenshots(url: str) -> List[str]:
+def crawl_text_content(url: str) -> List[Dict[str, str]]:
     max_clicks = int(os.environ.get("MAX_CRAWL_PAGES", "3"))
-    console.print(f"[bold blue][*] Capturing up to {max_clicks + 1} screenshots starting at:[/bold blue] {url}")
+    console.print(f"[bold blue][*] Crawling up to {max_clicks + 1} pages for text content starting at:[/bold blue] {url}")
     
-    screenshots = []
+    extracted_data = []
     
     try:
         with sync_playwright() as p:
@@ -20,13 +19,27 @@ def capture_screenshots(url: str) -> List[str]:
             )
             page = browser.new_page(ignore_https_errors=True)
             
+            def get_page_info(p_name: str):
+                return {
+                    "url": page.url,
+                    "name": p_name,
+                    "title": page.title(),
+                    "content": page.evaluate("() => document.body.innerText"),
+                    # Summary of interactive elements to help Qwen understand the UI
+                    "links": page.evaluate("""() => {
+                        return Array.from(document.querySelectorAll('a, button'))
+                            .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0)
+                            .map(el => ({
+                                text: (el.innerText || el.value || '').trim(),
+                                href: el.href || '',
+                                tag: el.tagName.toLowerCase()
+                            })).slice(0, 20); // Limit to top 20 for context
+                    }""")
+                }
+
             console.print("[*] Loading main page...")
             page.goto(url, wait_until="networkidle", timeout=15000)
-            
-            main_shot = "htb_screenshot_main.png"
-            page.screenshot(path=main_shot)
-            screenshots.append(main_shot)
-            console.print(f"[green][+] Main screenshot saved: {main_shot}[/green]")
+            extracted_data.append(get_page_info("Home Page"))
             
             keywords = ['login', 'admin', 'dashboard', 'register', 'portal', 'sign', 'auth', 'account']
             
@@ -64,7 +77,7 @@ def capture_screenshots(url: str) -> List[str]:
                     
             prioritized.sort(key=lambda x: x[0], reverse=True)
             
-            seen_hrefs = set()
+            seen_hrefs = {url}
             unique_targets = []
             for score, item in prioritized:
                 key = item['href'] if item['href'] else item['text']
@@ -74,23 +87,19 @@ def capture_screenshots(url: str) -> List[str]:
                     
             targets_to_click = unique_targets[:max_clicks]
             if targets_to_click:
-                console.print(f"[*] Found {len(targets_to_click)} actionable context links. Crawling...")
+                console.print(f"[*] Found {len(targets_to_click)} actionable context links. Crawling text...")
             
             for i, target in enumerate(targets_to_click):
                 target_name = target['text'] if len(target['text']) > 0 else 'element'
-                console.print(f"[*] Proceeding to '{target_name}'...")
+                console.print(f"[*] Extracting text from '{target_name}'...")
                 try:
                     if target['tag'] == 'a' and target['href']:
                         page.goto(target['href'], wait_until="networkidle", timeout=15000)
                     else:
                         page.evaluate(f"document.querySelectorAll('a, button')[{target['index']}].click()")
                         page.wait_for_load_state("networkidle", timeout=10000)
-                        
-                    shot_path = f"htb_screenshot_{i+1}.png"
-                    page.screenshot(path=shot_path)
-                    screenshots.append(shot_path)
-                    console.print(f"[green][+] Sub-screenshot saved: {shot_path}[/green]")
                     
+                    extracted_data.append(get_page_info(target_name))
                     page.goto(url, wait_until="networkidle", timeout=15000)
                 except Exception as ex:
                     console.print(f"[yellow][!] Could not process '{target_name}': {ex}[/yellow]")
@@ -100,8 +109,8 @@ def capture_screenshots(url: str) -> List[str]:
                         pass
                 
             browser.close()
-            return screenshots
+            return extracted_data
             
     except Exception as e:
         console.print(f"[bold red][X] Vision crawl error: {e}[/bold red]")
-        return screenshots
+        return extracted_data
