@@ -105,4 +105,6 @@ else
 fi
 
 echo "[+] Setup complete!"
-echo "[*] Run the agent using: source venv/bin/activate && python3 -m htb_agent.main start --help"
+echo "[*] Run the agent using:"
+echo "    source venv/bin/activate"
+echo "    sudo venv/bin/python3 -m htb_agent.main --help"

@@ -6,8 +6,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
-def run_nmap(ip: str, args: str = "-sV -sC") -> str:
-    command = ["nmap"] + args.split() + [ip]
+def run_nmap(ip: str, args: Optional[str] = None) -> str:
+    nmap_args = args if args else os.environ.get("NMAP_DEFAULT_ARGS", "-sV -sC")
+    command = ["nmap"] + nmap_args.split() + [ip]
     console.print(f"[bold blue][*] Running Nmap:[/bold blue] {' '.join(command)}")
     
     with Progress(
@@ -59,18 +60,37 @@ def run_gobuster_dir(url: str, wordlist: str) -> str:
     except FileNotFoundError:
         return "Error: gobuster not found"
         
-def perform_full_recon(ip: str, domain: str, wordlist_dir: Optional[str] = None):
+import concurrent.futures
+
+def perform_full_recon(ip: str, domain: str, wordlist_dir: Optional[str] = None, wordlist_sub: Optional[str] = None):
     results = {}
     
-    results["nmap"] = run_nmap(ip)
-    
-    http_open = "80/tcp" in results["nmap"] or "443/tcp" in results["nmap"] or "http" in results["nmap"]
-    
-    if http_open and domain and wordlist_dir:
-        url = f"http://{domain}"
-        results["directories"] = run_gobuster_dir(url, wordlist_dir)
-    else:
-        results["directories"] = "Skipped directory scan."
-        results["subdomains"] = "Skipped subdomain scan."
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # Submit all tasks simultaneously
+        future_nmap = executor.submit(run_nmap, ip)
         
+        future_dir = None
+        future_sub = None
+        
+        if domain:
+            # We assume HTTP exists and start brute force instantly instead of waiting for Nmap
+            url = f"http://{domain}"
+            if wordlist_dir:
+                future_dir = executor.submit(run_gobuster_dir, url, wordlist_dir)
+            if wordlist_sub:
+                future_sub = executor.submit(run_ffuf_subdomain, ip, domain, wordlist_sub)
+                
+        # Wait and collect real results
+        results["nmap"] = future_nmap.result()
+        
+        if future_dir:
+            results["directories"] = future_dir.result()
+        else:
+            results["directories"] = "Skipped directory scan."
+            
+        if future_sub:
+            results["subdomains"] = future_sub.result()
+        else:
+            results["subdomains"] = "Skipped subdomain scan."
+            
     return results
