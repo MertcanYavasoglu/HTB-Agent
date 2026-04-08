@@ -99,6 +99,9 @@ if [ ! -f ".env" ]; then
     read -p "Enter FFUF Subdomain Args [-mc 200,204,301,302,307,401,403 -fc 404]: " ffuf_sub
     ffuf_sub=${ffuf_sub:-"-mc 200,204,301,302,307,401,403 -fc 404"}
 
+    read -p "Enter Max Browser Crawl Pages [3]: " max_crawl
+    max_crawl=${max_crawl:-"3"}
+
     cat <<EOF > .env
 GEMINI_API_KEY="$api_key"
 NMAP_DEFAULT_ARGS="$nmap_args"
@@ -106,6 +109,7 @@ WORDLIST_DIRS="$dir_wordlist"
 WORDLIST_SUBDOMAINS="$sub_wordlist"
 FFUF_DIR_ARGS="$ffuf_dir"
 FFUF_SUB_ARGS="$ffuf_sub"
+MAX_CRAWL_PAGES="$max_crawl"
 EOF
     echo "[+] .env file created successfully."
 else

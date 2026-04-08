@@ -13,7 +13,7 @@ def get_gemini_client() -> Optional[genai.Client]:
         return None
     return genai.Client(api_key=api_key)
 
-def analyze_recon(results: Dict[str, str], screenshot_path: str = "") -> str:
+def analyze_recon(results: Dict[str, str], screenshot_paths: list = None) -> str:
     client = get_gemini_client()
     if not client: return ""
     
@@ -31,16 +31,18 @@ Be concise and clear. Format output in Markdown.
     
     contents = [prompt]
     
-    if screenshot_path and os.path.exists(screenshot_path):
-        console.print("[cyan][*] Adding screenshot to LLM context...[/cyan]")
+    if screenshot_paths:
+        console.print(f"[cyan][*] Adding {len(screenshot_paths)} screenshots to LLM context...[/cyan]")
         try:
             from google.genai import types
-            with open(screenshot_path, "rb") as f:
-                img_data = f.read()
-            contents.append("Below is a screenshot of the target web service. Factor this visual evidence into your vulnerability analysis:")
-            contents.append(
-                types.Part.from_bytes(data=img_data, mime_type="image/png")
-            )
+            for path in screenshot_paths:
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        img_data = f.read()
+                    contents.append(f"Visual evidence ({path}):")
+                    contents.append(
+                        types.Part.from_bytes(data=img_data, mime_type="image/png")
+                    )
         except Exception as e:
             console.print(f"[yellow][!] Failed to load screenshot: {e}[/yellow]")
     

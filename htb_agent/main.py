@@ -6,7 +6,7 @@ import os
 
 from htb_agent.system import add_to_hosts
 from htb_agent.recon import perform_full_recon
-from htb_agent.vision import capture_screenshot
+from htb_agent.vision import capture_screenshots
 from htb_agent.llm import analyze_recon, chat_loop
 
 load_dotenv()
@@ -29,7 +29,7 @@ def start(
 
     results = perform_full_recon(ip, domain, wordlist, sub_wordlist)
     
-    screenshot_path = ""
+    screenshot_paths = []
     http_open = "80/tcp" in results.get("nmap", "") or "443/tcp" in results.get("nmap", "") or "http" in results.get("nmap", "")
     
     # If concurrent scanning starts before nmap finishes, we still want to grab screenshot.
@@ -39,9 +39,9 @@ def start(
         if "443/tcp" in results.get("nmap", "") and "80/tcp" not in results.get("nmap", ""):
             target_url = f"https://{domain}" if domain else f"https://{ip}"
         
-        screenshot_path = capture_screenshot(target_url, output_path="htb_screenshot.png")
+        screenshot_paths = capture_screenshots(target_url)
         
-    analysis_text = analyze_recon(results, screenshot_path)
+    analysis_text = analyze_recon(results, screenshot_paths)
     
     console.print("\n[bold cyan]=== AGENT REPORT ===[/bold cyan]")
     console.print(Markdown(analysis_text))
