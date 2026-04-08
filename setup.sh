@@ -19,18 +19,18 @@ echo "[*] Detected OS: $OS"
 install_deps_apt() {
     echo "[*] Installing dependencies via apt..."
     sudo apt update
-    sudo apt install -y python3 python3-pip python3-venv nmap ffuf gobuster seclists
+    sudo apt install -y python3 python3-pip python3-venv nmap ffuf seclists
 }
 
 install_deps_dnf() {
     echo "[*] Installing dependencies via dnf..."
-    sudo dnf install -y python3 python3-pip nmap ffuf gobuster
+    sudo dnf install -y python3 python3-pip nmap ffuf
     # Note: seclists might not be in default repos, suggesting manual install if missing
 }
 
 install_deps_pacman() {
     echo "[*] Installing dependencies via pacman..."
-    sudo pacman -Sy --needed --noconfirm python python-pip nmap ffuf gobuster
+    sudo pacman -Sy --needed --noconfirm python python-pip nmap ffuf
     # Note: seclists is usually available in blackarch or AUR, not default repos
 }
 
@@ -53,7 +53,7 @@ case "$OS" in
             install_deps_pacman
         else
             echo "[!] Unsupported OS for automatic system package installation."
-            echo "[!] Please ensure nmap, ffuf, gobuster, python3, and python3-venv are installed manually."
+            echo "[!] Please ensure nmap, ffuf, python3, and python3-venv are installed manually."
         fi
         ;;
 esac
@@ -93,11 +93,19 @@ if [ ! -f ".env" ]; then
     read -p "Enter path to Subdomain Wordlist [/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt]: " sub_wordlist
     sub_wordlist=${sub_wordlist:-"/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"}
 
+    read -p "Enter FFUF Directory Args [-mc 200,204,301,302,307,401,403]: " ffuf_dir
+    ffuf_dir=${ffuf_dir:-"-mc 200,204,301,302,307,401,403"}
+
+    read -p "Enter FFUF Subdomain Args [-mc 200,204,301,302,307,401,403 -fc 404]: " ffuf_sub
+    ffuf_sub=${ffuf_sub:-"-mc 200,204,301,302,307,401,403 -fc 404"}
+
     cat <<EOF > .env
 GEMINI_API_KEY="$api_key"
 NMAP_DEFAULT_ARGS="$nmap_args"
 WORDLIST_DIRS="$dir_wordlist"
 WORDLIST_SUBDOMAINS="$sub_wordlist"
+FFUF_DIR_ARGS="$ffuf_dir"
+FFUF_SUB_ARGS="$ffuf_sub"
 EOF
     echo "[+] .env file created successfully."
 else

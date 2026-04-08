@@ -1,5 +1,6 @@
 import subprocess
 import os
+import re
 from typing import Optional, Dict
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -27,38 +28,86 @@ def run_nmap(ip: str, args: Optional[str] = None) -> str:
             console.print("[bold red][X] Nmap not found. Install it first.[/bold red]")
             return "Error: nmap not found"
 
+def run_ffuf_smart(base_command: list) -> str:
+    max_duplicates = 100
+    ignored_codes = set()
+    
+    while True:
+        current_command = base_command.copy()
+        if ignored_codes:
+            fc_idx = -1
+            for i, arg in enumerate(current_command):
+                if arg == "-fc":
+                    fc_idx = i
+                    break
+            
+            if fc_idx != -1:
+                current_command[fc_idx + 1] = f"{current_command[fc_idx + 1]},{','.join(ignored_codes)}"
+            else:
+                current_command.extend(["-fc", ",".join(ignored_codes)])
+
+        console.print(f"[bold blue][*] Executing FFUF:[/bold blue] {' '.join(current_command)}")
+        process = subprocess.Popen(current_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        
+        status_counts = {}
+        should_restart = False
+        restarted_code = None
+        current_output = []
+        
+        for line in iter(process.stdout.readline, ''):
+            match = re.search(r"\[Status:\s*(\d+)", line)
+            if match:
+                current_output.append(line)
+                code = match.group(1)
+                status_counts[code] = status_counts.get(code, 0) + 1
+                
+                if status_counts[code] >= max_duplicates:
+                    should_restart = True
+                    restarted_code = code
+                    process.terminate()
+                    break
+
+        process.wait()
+        
+        if should_restart:
+            console.print(f"[bold yellow][!] FFUF Auto-Filter: Dected {max_duplicates}+ responses with status {restarted_code}. It's a false positive. Filtering {restarted_code} and restarting the scan...[/bold yellow]")
+            ignored_codes.add(restarted_code)
+            continue
+        else:
+            return "".join(current_output)
+
+
 def run_ffuf_subdomain(ip: str, domain: str, wordlist: str) -> str:
     if not os.path.exists(wordlist):
         return f"Error: Wordlist not found: {wordlist}"
         
+    ffuf_args = os.environ.get("FFUF_SUB_ARGS", "-mc 200,204,301,302,307,401,403 -fc 404")
     command = [
         "ffuf", "-w", wordlist, 
         "-u", f"http://{ip}", 
-        "-H", f"Host: FUZZ.{domain}",
-        "-mc", "200,301,302", "-s"
-    ]
-    console.print(f"[bold blue][*] Running ffuf scan:[/bold blue] {' '.join(command)}")
+        "-H", f"Host: FUZZ.{domain}"
+    ] + ffuf_args.split()
+    
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        return e.stdout if e.stdout else f"Error: {e.stderr}"
+        return run_ffuf_smart(command)
     except FileNotFoundError:
         return "Error: ffuf not found"
+    except Exception as e:
+        return f"Error: {e}"
 
-def run_gobuster_dir(url: str, wordlist: str) -> str:
+def run_ffuf_dir(url: str, wordlist: str) -> str:
     if not os.path.exists(wordlist):
         return f"Error: Wordlist not found: {wordlist}"
         
-    command = ["gobuster", "dir", "-u", url, "-w", wordlist, "-q"]
-    console.print(f"[bold blue][*] Running Gobuster:[/bold blue] {' '.join(command)}")
+    ffuf_args = os.environ.get("FFUF_DIR_ARGS", "-mc 200,204,301,302,307,401,403")
+    command = ["ffuf", "-w", wordlist, "-u", f"{url}/FUZZ"] + ffuf_args.split()
+    
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        return e.stdout if e.stdout else f"Error: {e.stderr}"
+        return run_ffuf_smart(command)
     except FileNotFoundError:
-        return "Error: gobuster not found"
+        return "Error: ffuf not found"
+    except Exception as e:
+        return f"Error: {e}"
         
 import concurrent.futures
 
@@ -76,7 +125,7 @@ def perform_full_recon(ip: str, domain: str, wordlist_dir: Optional[str] = None,
             # We assume HTTP exists and start brute force instantly instead of waiting for Nmap
             url = f"http://{domain}"
             if wordlist_dir:
-                future_dir = executor.submit(run_gobuster_dir, url, wordlist_dir)
+                future_dir = executor.submit(run_ffuf_dir, url, wordlist_dir)
             if wordlist_sub:
                 future_sub = executor.submit(run_ffuf_subdomain, ip, domain, wordlist_sub)
                 
