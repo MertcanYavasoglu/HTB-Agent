@@ -3,6 +3,61 @@ set -e
 
 echo "[*] Setting up HTB Agent environment..."
 
+# 0. OS Detection and System Dependencies
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+    OS_LIKE=$ID_LIKE
+else
+    echo "[!] Cannot determine OS. Skipping system dependencies installation."
+    OS="unknown"
+    OS_LIKE="unknown"
+fi
+
+echo "[*] Detected OS: $OS"
+
+install_deps_apt() {
+    echo "[*] Installing dependencies via apt..."
+    sudo apt update
+    sudo apt install -y python3 python3-pip python3-venv nmap ffuf gobuster seclists
+}
+
+install_deps_dnf() {
+    echo "[*] Installing dependencies via dnf..."
+    sudo dnf install -y python3 python3-pip nmap ffuf gobuster
+    # Note: seclists might not be in default repos, suggesting manual install if missing
+}
+
+install_deps_pacman() {
+    echo "[*] Installing dependencies via pacman..."
+    sudo pacman -Sy --needed --noconfirm python python-pip nmap ffuf gobuster
+    # Note: seclists is usually available in blackarch or AUR, not default repos
+}
+
+case "$OS" in
+    ubuntu|debian|kali|parrot|linuxmint|pop)
+        install_deps_apt
+        ;;
+    fedora|centos|rhel|almalinux|rocky)
+        install_deps_dnf
+        ;;
+    arch|manjaro|artix|endeavouros)
+        install_deps_pacman
+        ;;
+    *)
+        if echo "$OS_LIKE" | grep -q "debian"; then
+            install_deps_apt
+        elif echo "$OS_LIKE" | grep -q "fedora\|rhel\|centos"; then
+            install_deps_dnf
+        elif echo "$OS_LIKE" | grep -q "arch"; then
+            install_deps_pacman
+        else
+            echo "[!] Unsupported OS for automatic system package installation."
+            echo "[!] Please ensure nmap, ffuf, gobuster, python3, and python3-venv are installed manually."
+        fi
+        ;;
+esac
+
 # 1. Create Virtual Environment
 if [ ! -d "venv" ]; then
     echo "[*] Creating Python virtual environment..."
@@ -18,7 +73,12 @@ pip install -r requirements.txt
 
 # 3. Install Playwright Browsers
 echo "[*] Installing Playwright Chromium..."
-playwright install chromium --with-deps
+if [ -x "$(command -v apt-get)" ]; then
+    playwright install chromium --with-deps
+else
+    echo "[!] Non-Debian OS detected. Installing Playwright without --with-deps (you may need to install browser dependencies manually if Playwright fails to launch)."
+    playwright install chromium
+fi
 
 # 4. Prompt for .env configuration
 if [ ! -f ".env" ]; then
