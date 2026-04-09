@@ -9,7 +9,7 @@ console = Console()
 
 def run_nmap(ip: str, args: Optional[str] = None) -> str:
     nmap_args = args if args else os.environ.get("NMAP_DEFAULT_ARGS", "-sV -sC")
-    command = ["nmap"] + nmap_args.split() + [ip]
+    command = ["sudo", "nmap"] + nmap_args.split() + [ip]
     console.print(f"[bold blue][*] Running Nmap:[/bold blue] {' '.join(command)}")
     
     with Progress(

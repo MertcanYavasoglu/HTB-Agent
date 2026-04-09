@@ -1,4 +1,6 @@
 import os
+import subprocess
+
 from rich.console import Console
 
 console = Console()
@@ -16,10 +18,21 @@ def add_to_hosts(ip: str, domain: str):
             return True
             
         console.print(f"[cyan][*] Adding {domain} to /etc/hosts...[/cyan]")
-        with open(hosts_path, "a") as f:
-            f.write(entry)
-        console.print(f"[green][+] {domain} added.[/green]")
-        return True
+        
+        # Use subprocess to run 'tee -a' with sudo for isolation
+        try:
+            subprocess.run(
+                ["sudo", "tee", "-a", hosts_path],
+                input=entry.encode(),
+                stdout=subprocess.DEVNULL,
+                check=True
+            )
+            console.print(f"[green][+] {domain} added.[/green]")
+            return True
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red][X] Failed to add {domain} to hosts: {e}[/bold red]")
+            return False
+
     except PermissionError:
         console.print("[bold red][X] Permission denied for /etc/hosts. Run with sudo.[/bold red]")
         return False
