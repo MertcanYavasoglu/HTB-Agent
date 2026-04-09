@@ -4,7 +4,7 @@ from rich.markdown import Markdown
 from dotenv import load_dotenv
 import os
 
-from htb_agent.system import add_to_hosts
+from htb_agent.system import add_to_hosts, ensure_sudo
 from htb_agent.recon import perform_full_recon
 from htb_agent.vision import crawl_text_content
 from htb_agent.llm import analyze_recon, chat_loop
@@ -23,6 +23,9 @@ def start(
     chat: bool = typer.Option(True, "--chat/--no-chat", help="Start interactive chat after analysis")
 ):
     console.print(f"\n[bold green][+] Target initialized: {ip} {f'({domain})' if domain else ''}[/bold green]\n")
+    
+    # Pre-cache user's sudo password to prevent headless hanging later
+    ensure_sudo()
     
     if hosts and domain:
         add_to_hosts(ip, domain)
@@ -49,10 +52,18 @@ def start(
     try:
         with open(report_file, "w") as f:
             f.write(f"# Target: {domain if domain else ip}\n\n")
-            f.write("## 1. Nmap Scan\n```text\n" + results.get("nmap", "") + "\n```\n\n")
-            f.write("## 2. Directories Found\n```text\n" + results.get("directories", "") + "\n```\n\n")
-            f.write("## 3. Subdomains Found\n```text\n" + results.get("subdomains", "") + "\n```\n\n")
-            f.write("## 4. Vulnerability Analysis\n\n" + analysis_text)
+            f.write("## 1. Nmap Scan\n```text\n" + str(results.get("nmap", "")) + "\n```\n\n")
+            f.write("## 2. Directories Found\n```text\n" + str(results.get("directories", "")) + "\n```\n\n")
+            f.write("## 3. Subdomains Found\n```text\n" + str(results.get("subdomains", "")) + "\n```\n\n")
+            
+            f.write("## 4. Web Content Data (Playwright)\n")
+            if crawl_data:
+                import json
+                f.write("```json\n" + json.dumps(crawl_data, indent=2, ensure_ascii=False) + "\n```\n\n")
+            else:
+                f.write("```text\nNo web data collected.\n```\n\n")
+            
+            f.write("## 5. Vulnerability Analysis\n\n" + analysis_text)
         console.print(f"[green][+] Writeup drafted: {report_file}[/green]")
     except Exception as e:
         console.print(f"[bold red][X] Failed to save writeup: {e}[/bold red]")

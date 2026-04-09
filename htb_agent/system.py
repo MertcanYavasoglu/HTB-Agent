@@ -1,9 +1,21 @@
 import os
 import subprocess
+import sys
 
 from rich.console import Console
 
 console = Console()
+
+def ensure_sudo():
+    """Ensure we have sudo privileges early on so future commands don't hang waiting for password."""
+    try:
+        console.print("[cyan][*] Requesting sudo privileges for nmap and /etc/hosts modifications...[/cyan]")
+        subprocess.run(["sudo", "-v"], check=True)
+    except subprocess.CalledProcessError:
+        console.print("[bold red][X] Sudo authentication failed or was cancelled. Exiting.[/bold red]")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(1)
 
 def add_to_hosts(ip: str, domain: str):
     hosts_path = "/etc/hosts"
