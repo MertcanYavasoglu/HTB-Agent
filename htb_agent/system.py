@@ -19,30 +19,54 @@ def ensure_sudo():
 
 def add_to_hosts(ip: str, domain: str):
     hosts_path = "/etc/hosts"
-    entry = f"{ip}\t{domain}\n"
     
     try:
         with open(hosts_path, "r") as f:
-            content = f.read()
+            lines = f.readlines()
             
-        if domain in content and ip in content:
-            console.print(f"[yellow][!] {domain} already in /etc/hosts.[/yellow]")
+        domain_found = False
+        ip_matches = False
+        new_lines = []
+        
+        for line in lines:
+            if not line.strip() or line.strip().startswith('#'):
+                new_lines.append(line)
+                continue
+                
+            parts = line.strip().split()
+            if len(parts) >= 2 and domain in parts[1:]:
+                domain_found = True
+                if parts[0] == ip:
+                    ip_matches = True
+                    new_lines.append(line)
+                else:
+                    console.print(f"[yellow][!] {domain} found with different IP ({parts[0]}). Updating to {ip}...[/yellow]")
+                    parts[0] = ip
+                    new_lines.append("\t".join(parts) + "\n")
+            else:
+                new_lines.append(line)
+
+        if domain_found and ip_matches:
+            console.print(f"[yellow][!] {domain} already in /etc/hosts with correct IP.[/yellow]")
             return True
             
-        console.print(f"[cyan][*] Adding {domain} to /etc/hosts...[/cyan]")
+        if not domain_found:
+            console.print(f"[cyan][*] Adding {domain} to /etc/hosts...[/cyan]")
+            new_lines.append(f"{ip}\t{domain}\n")
+            
+        new_content = "".join(new_lines)
         
-        # Use subprocess to run 'tee -a' with sudo for isolation
         try:
             subprocess.run(
-                ["sudo", "tee", "-a", hosts_path],
-                input=entry.encode(),
+                ["sudo", "tee", hosts_path],
+                input=new_content.encode(),
                 stdout=subprocess.DEVNULL,
                 check=True
             )
-            console.print(f"[green][+] {domain} added.[/green]")
+            console.print(f"[green][+] /etc/hosts updated mapping {domain} to {ip}.[/green]")
             return True
         except subprocess.CalledProcessError as e:
-            console.print(f"[bold red][X] Failed to add {domain} to hosts: {e}[/bold red]")
+            console.print(f"[bold red][X] Failed to update hosts: {e}[/bold red]")
             return False
 
     except PermissionError:
