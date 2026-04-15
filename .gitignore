@@ -39,6 +39,7 @@ writeup_*.md
 !walkthrough.md
 !implementation_plan.md
 !task.md
+*nmap*
 
 # OS Specific
 .DS_Store

@@ -81,8 +81,16 @@ async def async_start(ip: str, domain: str, wordlist: str, sub_wordlist: str, ho
                 f.write("```json\n" + json.dumps(crawl_data, indent=2, ensure_ascii=False) + "\n```\n\n")
             else:
                 f.write("```text\nNo web data collected.\n```\n\n")
+                
+            f.write("## 5. Service-Specific Enumerations\n")
+            service_enums = results.get("service_enumerations", {})
+            if service_enums:
+                for tool, output in service_enums.items():
+                    f.write(f"### Output: {tool}\n```text\n{output}\n```\n\n")
+            else:
+                f.write("```text\nNo specific service enumerator triggered.\n```\n\n")
             
-            f.write("## 5. Vulnerability Analysis\n\n" + analysis_text)
+            f.write("## 6. Vulnerability Analysis\n\n" + analysis_text)
         console.print(f"[green][+] Writeup drafted: {report_file}[/green]")
     except Exception as e:
         console.print(f"[bold red][X] Failed to save writeup: {e}[/bold red]")

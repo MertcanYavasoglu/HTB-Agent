@@ -24,6 +24,13 @@ async def analyze_recon(results: Dict[str, str], crawl_data: List[Dict[str, str]
             if page.get('links'):
                 extra_web_context += "Interactive Elements found: " + ", ".join([l['text'] for l in page['links'] if l['text']]) + "\n\n"
 
+    extra_service_context = ""
+    service_enums = results.get("service_enumerations", {})
+    if service_enums:
+        extra_service_context = "\n[SERVICE SPECIFIC ENUMERATIONS]\n"
+        for tool, output in service_enums.items():
+            extra_service_context += f"--- {tool.upper()} ---\n{output[:3000]}\n\n"
+
     prompt = f"""
 You are an expert Penetration Tester. Analyze the reconnaissance data for a Hack The Box target.
 Provide a summary of vulnerabilities, exploitation steps, and exact bash commands to run.
@@ -36,6 +43,7 @@ Provide a summary of vulnerabilities, exploitation steps, and exact bash command
 
 [FFUF SUBDOMAIN RESULTS]
 {results.get('subdomains', 'No subdomain data.')}
+{extra_service_context}
 {extra_web_context}
 
 Be concise, technical, and use Markdown.

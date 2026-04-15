@@ -3,6 +3,7 @@ import os
 import re
 import asyncio
 import shutil
+import xml.etree.ElementTree as ET
 from typing import Optional, Dict
 
 from rich.console import Console
@@ -59,20 +60,24 @@ async def run_fast_scan(ip: str) -> list[int]:
         
     return sorted(list(ports))
 
-async def run_nmap(ip: str, ports: list[int] = None, args: Optional[str] = None) -> str:
+async def run_nmap(ip: str, ports: list[int] = None, args: Optional[str] = None) -> tuple[str, dict]:
     nmap_args = args if args else os.environ.get("NMAP_DEFAULT_ARGS", "-sV -sC")
     command = ["sudo", "nmap"] + nmap_args.split()
     if ports:
         command += ["-p", ",".join(map(str, ports))]
-    command += [ip]
-    console.print(f"[bold blue][*] Running Nmap:[/bold blue] {' '.join(command)}")
+        
+    xml_file = f"nmap_{ip}.xml"
+    txt_file = f"nmap_{ip}.txt"
+    command += ["-oX", xml_file, "-oN", txt_file, ip]
+    
+    console.print(f"[bold blue][*] Running Deep Nmap:[/bold blue] {' '.join(command)}")
     
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        progress.add_task(description="Scanning ports...", total=None)
+        progress.add_task(description="Deep scanning services...", total=None)
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -82,15 +87,124 @@ async def run_nmap(ip: str, ports: list[int] = None, args: Optional[str] = None)
             stdout, stderr = await process.communicate()
             if process.returncode != 0:
                 decoded_stderr = stderr.decode('utf-8', errors='replace')
-                decoded_stdout = stdout.decode('utf-8', errors='replace')
                 console.print(f"[bold red][X] Nmap error: {decoded_stderr}[/bold red]")
-                return decoded_stdout if decoded_stdout else f"Error: {decoded_stderr}"
-            return stdout.decode('utf-8', errors='replace')
+                
+            # Parse XML
+            parsed_data = {"ports": {}}
+            try:
+                if os.path.exists(xml_file):
+                    tree = ET.parse(xml_file)
+                    root = tree.getroot()
+                    for host in root.findall('host'):
+                        ports_el = host.find('ports')
+                        if ports_el:
+                            for port in ports_el.findall('port'):
+                                port_id = int(port.get('portid'))
+                                state_el = port.find('state')
+                                state = state_el.get('state') if state_el is not None else 'unknown'
+                                
+                                service_el = port.find('service')
+                                service_name = service_el.get('name') if service_el is not None else 'unknown'
+                                version = service_el.get('version') if service_el is not None else ''
+                                product = service_el.get('product') if service_el is not None else ''
+                                
+                                scripts = {}
+                                for script in port.findall('script'):
+                                    scripts[script.get('id')] = script.get('output')
+                                    
+                                parsed_data["ports"][port_id] = {
+                                    "state": state,
+                                    "service": service_name,
+                                    "product": product,
+                                    "version": version,
+                                    "scripts": scripts
+                                }
+            except Exception as e:
+                console.print(f"[bold red][X] XML Parsing Error: {e}[/bold red]")
+                
+            try:
+                with open(txt_file, "r") as tf:
+                    raw_text = tf.read()
+            except:
+                raw_text = stdout.decode('utf-8', errors='replace')
+                
+            return raw_text, parsed_data
+            
         except FileNotFoundError:
             console.print("[bold red][X] Nmap not found. Install it first.[/bold red]")
-            return "Error: nmap not found"
+            return "Error: nmap not found", {}
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: {e}", {}
+            
+async def trigger_service_enumerations(parsed_data: dict, ip: str, domain: str) -> dict:
+    service_results = {}
+    tasks = {}
+    
+    async def run_cmd_async(cmd_list: list, task_name: str) -> str:
+        console.print(f"[bold cyan][*] External Trigger ({task_name}):[/bold cyan] {' '.join(cmd_list)}")
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *cmd_list,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+            stdout, _ = await p.communicate()
+            return stdout.decode('utf-8', errors='ignore')
+        except Exception as e:
+            return f"Error executing {task_name}: {e}"
+
+    target = domain if domain else ip
+
+    for port, info in parsed_data.get("ports", {}).items():
+        if info["state"] != "open":
+            continue
+            
+        service_name = info.get("service", "")
+        
+        # 1. SMB / RPC
+        if port in (139, 445) or "smb" in service_name or "netbios" in service_name:
+            if shutil.which("enum4linux-ng"):
+                tasks["enum4linux"] = asyncio.create_task(run_cmd_async(["enum4linux-ng", "-A", ip], "enum4linux-ng"))
+            elif shutil.which("netexec"):
+                tasks["netexec_smb"] = asyncio.create_task(run_cmd_async(["netexec", "smb", ip], "netexec"))
+            
+        # 2. WEB (nuclei / whatweb)
+        if port in (80, 443, 8080, 8000, 8443) or "http" in service_name:
+            scheme = "https" if port in (443, 8443) or "https" in service_name else "http"
+            url = f"{scheme}://{target}" if port in (80, 443) else f"{scheme}://{target}:{port}"
+            if shutil.which("nuclei"):
+                # Limited fast templates (technologies and cves)
+                tasks[f"nuclei_{port}"] = asyncio.create_task(run_cmd_async(["nuclei", "-u", url, "-t", "technologies,cves", "-silent"], f"nuclei on {url}"))
+            if shutil.which("whatweb"):
+                tasks[f"whatweb_{port}"] = asyncio.create_task(run_cmd_async(["whatweb", url], f"whatweb on {url}"))
+
+        # 3. DNS (Zone Transfer)
+        if port == 53 or "domain" in service_name:
+            if domain:
+                tasks["dig_axfr"] = asyncio.create_task(run_cmd_async(["dig", "axfr", f"@{ip}", target], "dig axfr"))
+
+        # 4. Databases
+        if port in (3306, 5432, 1433) or service_name in ("mysql", "postgresql", "ms-sql-s"):
+            if port == 3306 or "mysql" in service_name:
+                script = "mysql-info,mysql-empty-password"
+            elif port == 5432 or "postgres" in service_name:
+                script = "pgsql-brute" 
+            elif port == 1433 or "ms-sql" in service_name:
+                script = "ms-sql-info,ms-sql-empty-password"
+            else:
+                script = None
+                
+            if script:
+                tasks[f"nmap_db_{port}"] = asyncio.create_task(run_cmd_async([
+                    "sudo", "nmap", "-p", str(port), f"--script={script}", ip
+                ], f"database scripts on {port}"))
+
+    if tasks:
+        await asyncio.gather(*tasks.values())
+        for k, v in tasks.items():
+            service_results[k] = v.result()
+            
+    return service_results
 
 async def run_ffuf_smart(base_command: list) -> str:
     max_duplicates = 100
@@ -243,9 +357,16 @@ async def perform_full_recon(ip: str, domain: str, wordlist_dir: Optional[str] =
     for k, v in sub_tasks.items():
         tasks[f"sub_{k}"] = v
             
+    # Await FFUF tasks separately or collect them
     await asyncio.gather(*tasks.values())
     
-    results["nmap"] = tasks["nmap"].result()
+    raw_nmap, parsed_nmap = tasks["nmap"].result()
+    results["nmap"] = raw_nmap
+    results["nmap_json"] = parsed_nmap
+    
+    # Trigger secondary scripts based on Nmap XML context
+    service_enum_results = await trigger_service_enumerations(parsed_nmap, ip, domain)
+    results["service_enumerations"] = service_enum_results
     
     results["directories"] = {}
     for port in web_ports:
