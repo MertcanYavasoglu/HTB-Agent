@@ -3,6 +3,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from dotenv import load_dotenv
 import os
+import asyncio
 
 from htb_agent.system import add_to_hosts, ensure_sudo
 from htb_agent.recon import perform_full_recon
@@ -13,15 +14,8 @@ load_dotenv()
 app = typer.Typer(help="HTB Recon & Analysis Agent")
 console = Console()
 
-@app.command()
-def start(
-    ip: str = typer.Option(..., "-i", "--ip", help="Target IP address"),
-    domain: str = typer.Option(None, "-d", "--domain", help="Target Domain"),
-    wordlist: str = typer.Option(os.environ.get("WORDLIST_DIRS", ""), "-w", "--wordlist", help="Wordlist for directory bruteforce"),
-    sub_wordlist: str = typer.Option(os.environ.get("WORDLIST_SUBDOMAINS", ""), "--sub-wordlist", help="Wordlist for subdomain bruteforce"),
-    hosts: bool = typer.Option(True, "--hosts/--no-hosts", help="Add to /etc/hosts"),
-    chat: bool = typer.Option(True, "--chat/--no-chat", help="Start interactive chat after analysis")
-):
+
+async def async_start(ip: str, domain: str, wordlist: str, sub_wordlist: str, hosts: bool, chat: bool):
     console.print(f"\n[bold green][+] Target initialized: {ip} {f'({domain})' if domain else ''}[/bold green]\n")
     
     # Pre-cache user's sudo password to prevent headless hanging later
@@ -30,19 +24,44 @@ def start(
     if hosts and domain:
         add_to_hosts(ip, domain)
 
-    results = perform_full_recon(ip, domain, wordlist, sub_wordlist)
+    results = await perform_full_recon(ip, domain, wordlist, sub_wordlist)
+    
+    open_ports = results.get("open_ports", [])
+    common_web_ports = {80, 443, 3000, 5000, 8000, 8008, 8080, 8443}
+    web_ports = [p for p in open_ports if p in common_web_ports]
     
     crawl_data = []
-    http_open = "80/tcp" in results.get("nmap", "") or "443/tcp" in results.get("nmap", "") or "http" in results.get("nmap", "")
-    
-    if http_open or (domain and results.get("directories") != "Skipped directory scan."):
-        target_url = f"http://{domain}" if domain else f"http://{ip}"
-        if "443/tcp" in results.get("nmap", "") and "80/tcp" not in results.get("nmap", ""):
-            target_url = f"https://{domain}" if domain else f"https://{ip}"
+    for port in web_ports:
+        is_https = (port == 443 or port == 8443)
+        scheme = "https" if is_https else "http"
+        target_domain = domain if domain else ip
         
-        crawl_data = crawl_text_content(target_url)
+        if port == 80 and scheme == "http":
+            url = f"{scheme}://{target_domain}"
+        elif port == 443 and scheme == "https":
+            url = f"{scheme}://{target_domain}"
+        else:
+            url = f"{scheme}://{target_domain}:{port}"
+            
+        port_crawl_data = await crawl_text_content(url)
+        crawl_data.extend(port_crawl_data)
         
-    analysis_text = analyze_recon(results, crawl_data)
+    # Format FFUF outputs for markdown and LLM context
+    directories = results.get("directories", {})
+    if isinstance(directories, dict):
+        dir_str = ""
+        for port, res in directories.items():
+            dir_str += f"=== Port {port} ===\n{res}\n"
+        results["directories"] = dir_str if dir_str else "No directories scanned."
+        
+    subdomains = results.get("subdomains", {})
+    if isinstance(subdomains, dict):
+        sub_str = ""
+        for port, res in subdomains.items():
+            sub_str += f"=== Port {port} ===\n{res}\n"
+        results["subdomains"] = sub_str if sub_str else "No subdomains scanned."
+        
+    analysis_text = await analyze_recon(results, crawl_data)
     
     console.print("\n[bold cyan]=== AGENT REPORT ===[/bold cyan]")
     console.print(Markdown(analysis_text))
@@ -70,7 +89,18 @@ def start(
         
     if chat:
         chat_context = f"Target: {ip} ({domain})\nNmap: {results.get('nmap')}\nDirectories: {results.get('directories')}\nSubdomains: {results.get('subdomains')}\nReport: {analysis_text}"
-        chat_loop(chat_context)
+        await chat_loop(chat_context)
+
+@app.command()
+def start(
+    ip: str = typer.Option(..., "-i", "--ip", help="Target IP address"),
+    domain: str = typer.Option(None, "-d", "--domain", help="Target Domain"),
+    wordlist: str = typer.Option(os.environ.get("WORDLIST_DIRS", ""), "-w", "--wordlist", help="Wordlist for directory bruteforce"),
+    sub_wordlist: str = typer.Option(os.environ.get("WORDLIST_SUBDOMAINS", ""), "--sub-wordlist", help="Wordlist for subdomain bruteforce"),
+    hosts: bool = typer.Option(True, "--hosts/--no-hosts", help="Add to /etc/hosts"),
+    chat: bool = typer.Option(True, "--chat/--no-chat", help="Start interactive chat after analysis")
+):
+    asyncio.run(async_start(ip, domain, wordlist, sub_wordlist, hosts, chat))
 
 if __name__ == "__main__":
     app()

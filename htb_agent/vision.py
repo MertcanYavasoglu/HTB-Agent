@@ -1,32 +1,32 @@
 import os
 from typing import List, Dict
 from rich.console import Console
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
 console = Console()
 
-def crawl_text_content(url: str) -> List[Dict[str, str]]:
+async def crawl_text_content(url: str) -> List[Dict[str, str]]:
     max_clicks = int(os.environ.get("MAX_CRAWL_PAGES", "3"))
     console.print(f"[bold blue][*] Crawling up to {max_clicks + 1} pages for text content starting at:[/bold blue] {url}")
     
     extracted_data = []
     
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
                 headless=True, 
                 args=['--disable-dev-shm-usage', '--no-sandbox', '--disable-gpu']
             )
-            page = browser.new_page(ignore_https_errors=True)
+            page = await browser.new_page(ignore_https_errors=True)
             
-            def get_page_info(p_name: str):
+            async def get_page_info(p_name: str):
                 return {
                     "url": page.url,
                     "name": p_name,
-                    "title": page.title(),
-                    "content": page.evaluate("() => document.body.innerText"),
+                    "title": await page.title(),
+                    "content": await page.evaluate("() => document.body.innerText"),
                     # Summary of interactive elements to help Qwen understand the UI
-                    "links": page.evaluate("""() => {
+                    "links": await page.evaluate("""() => {
                         return Array.from(document.querySelectorAll('a, button'))
                             .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0)
                             .map(el => ({
@@ -38,12 +38,12 @@ def crawl_text_content(url: str) -> List[Dict[str, str]]:
                 }
 
             console.print("[*] Loading main page...")
-            page.goto(url, wait_until="networkidle", timeout=15000)
-            extracted_data.append(get_page_info("Home Page"))
+            await page.goto(url, wait_until="networkidle", timeout=15000)
+            extracted_data.append(await get_page_info("Home Page"))
             
             keywords = ['login', 'admin', 'dashboard', 'register', 'portal', 'sign', 'auth', 'account']
             
-            links_data = page.evaluate("""
+            links_data = await page.evaluate("""
                 () => {
                     const elements = Array.from(document.querySelectorAll('a, button'));
                     const results = [];
@@ -94,21 +94,21 @@ def crawl_text_content(url: str) -> List[Dict[str, str]]:
                 console.print(f"[*] Extracting text from '{target_name}'...")
                 try:
                     if target['tag'] == 'a' and target['href']:
-                        page.goto(target['href'], wait_until="networkidle", timeout=15000)
+                        await page.goto(target['href'], wait_until="networkidle", timeout=15000)
                     else:
-                        page.evaluate(f"document.querySelectorAll('a, button')[{target['index']}].click()")
-                        page.wait_for_load_state("networkidle", timeout=10000)
+                        await page.evaluate(f"document.querySelectorAll('a, button')[{target['index']}].click()")
+                        await page.wait_for_load_state("networkidle", timeout=10000)
                     
-                    extracted_data.append(get_page_info(target_name))
-                    page.goto(url, wait_until="networkidle", timeout=15000)
+                    extracted_data.append(await get_page_info(target_name))
+                    await page.goto(url, wait_until="networkidle", timeout=15000)
                 except Exception as ex:
                     console.print(f"[yellow][!] Could not process '{target_name}': {ex}[/yellow]")
                     try:
-                        page.goto(url, wait_until="networkidle", timeout=10000)
+                        await page.goto(url, wait_until="networkidle", timeout=10000)
                     except:
                         pass
                 
-            browser.close()
+            await browser.close()
             return extracted_data
             
     except Exception as e:
