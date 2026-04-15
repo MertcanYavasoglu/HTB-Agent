@@ -31,6 +31,17 @@ async def analyze_recon(results: Dict[str, str], crawl_data: List[Dict[str, str]
         for tool, output in service_enums.items():
             extra_service_context += f"--- {tool.upper()} ---\n{output[:3000]}\n\n"
 
+    recursive_context = ""
+    recursive_web_results = results.get("recursive_subdomains", {})
+    if recursive_web_results:
+        recursive_context = "\n[RECURSIVE SUBDOMAIN SCANS]\n"
+        for sub, res_dict in recursive_web_results.items():
+            recursive_context += f"Subdomain: {sub}\n"
+            for port, port_results in res_dict.items():
+                for tool, output in port_results.items():
+                    recursive_context += f"Port {port} -> {tool.upper()}:\n{output[:1000]}\n"
+        recursive_context += "\n"
+
     prompt = f"""
 You are an expert Penetration Tester. Analyze the reconnaissance data for a Hack The Box target.
 Provide a summary of vulnerabilities, exploitation steps, and exact bash commands to run.
@@ -44,6 +55,7 @@ Provide a summary of vulnerabilities, exploitation steps, and exact bash command
 [FFUF SUBDOMAIN RESULTS]
 {results.get('subdomains', 'No subdomain data.')}
 {extra_service_context}
+{recursive_context}
 {extra_web_context}
 
 Be concise, technical, and use Markdown.

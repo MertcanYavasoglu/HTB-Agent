@@ -380,3 +380,45 @@ async def perform_full_recon(ip: str, domain: str, wordlist_dir: Optional[str] =
         
     return results
 
+async def perform_web_recon(ip: str, domain: str, port: int, wordlist_dir: Optional[str]) -> dict:
+    results = {}
+    tasks = {}
+
+    async def run_cmd_async(cmd_list: list, task_name: str) -> str:
+        console.print(f"[bold cyan][*] Sub-Recon Trigger ({task_name}):[/bold cyan] {' '.join(cmd_list)}")
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *cmd_list,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+            stdout, _ = await p.communicate()
+            return stdout.decode('utf-8', errors='ignore')
+        except Exception as e:
+            return f"Error executing {task_name}: {e}"
+
+    is_https = (port == 443 or port == 8443)
+    scheme = "https" if is_https else "http"
+    if port == 80 and scheme == "http":
+        url = f"{scheme}://{domain}"
+    elif port == 443 and scheme == "https":
+        url = f"{scheme}://{domain}"
+    else:
+        url = f"{scheme}://{domain}:{port}"
+        
+    if wordlist_dir:
+        tasks["dir"] = asyncio.create_task(run_ffuf_dir(url, wordlist_dir))
+        
+    if shutil.which("nuclei"):
+        tasks["nuclei"] = asyncio.create_task(run_cmd_async(["nuclei", "-u", url, "-t", "technologies,cves", "-silent"], f"nuclei on {url}"))
+    if shutil.which("whatweb"):
+        tasks["whatweb"] = asyncio.create_task(run_cmd_async(["whatweb", url], f"whatweb on {url}"))
+
+    if tasks:
+        await asyncio.gather(*tasks.values())
+        results["directories"] = tasks["dir"].result() if "dir" in tasks else "Skipped directory scan."
+        results["nuclei"] = tasks["nuclei"].result() if "nuclei" in tasks else ""
+        results["whatweb"] = tasks["whatweb"].result() if "whatweb" in tasks else ""
+
+    return results
+

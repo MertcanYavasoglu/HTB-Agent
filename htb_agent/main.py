@@ -6,9 +6,10 @@ import os
 import asyncio
 
 from htb_agent.system import add_to_hosts, ensure_sudo
-from htb_agent.recon import perform_full_recon
+from htb_agent.recon import perform_full_recon, perform_web_recon
 from htb_agent.vision import crawl_text_content
 from htb_agent.llm import analyze_recon, chat_loop
+import re
 
 load_dotenv()
 app = typer.Typer(help="HTB Recon & Analysis Agent")
@@ -55,11 +56,61 @@ async def async_start(ip: str, domain: str, wordlist: str, sub_wordlist: str, ho
         results["directories"] = dir_str if dir_str else "No directories scanned."
         
     subdomains = results.get("subdomains", {})
+    subdomains_dict_copy = dict(subdomains) if isinstance(subdomains, dict) else {}
     if isinstance(subdomains, dict):
         sub_str = ""
         for port, res in subdomains.items():
             sub_str += f"=== Port {port} ===\n{res}\n"
         results["subdomains"] = sub_str if sub_str else "No subdomains scanned."
+        
+    # --- RECURSIVE SUBDOMAIN RECON ---
+    found_subdomains = set()
+    
+    # Parse from FFUF
+    for port, out in subdomains_dict_copy.items():
+        matches = re.finditer(r"^([a-zA-Z0-9\-\_]+)\s+\[Status:\s*\d+", out, re.MULTILINE)
+        for m in matches:
+            if domain:
+                found_subdomains.add(f"{m.group(1)}.{domain}")
+
+    # Parse from dig axfr
+    dig_out = results.get("service_enumerations", {}).get("dig_axfr", "")
+    if domain and dig_out:
+        matches = re.finditer(r"([a-zA-Z0-9\-\_\.]+)\.?\s+\d+\s+IN\s+", dig_out)
+        for m in matches:
+            sub = m.group(1).rstrip('.')
+            if sub.endswith(domain) and sub != domain:
+                found_subdomains.add(sub)
+                
+    found_subdomains = list(found_subdomains)[:5] # Hard safety cap
+    
+    recursive_web_results = {}
+    if found_subdomains:
+        console.print(f"[bold green]=== Recursive Subdomain Recon Triggered ({len(found_subdomains)} targets) ===[/bold green]")
+        for sub in found_subdomains:
+            console.print(f"[cyan][*] Targeting Subdomain: {sub}[/cyan]")
+            if hosts:
+                add_to_hosts(ip, sub)
+                
+            sub_recon_output = {}
+            for port in web_ports:
+                # Crawl Vision
+                is_https = (port == 443 or port == 8443)
+                scheme = "https" if is_https else "http"
+                url = f"{scheme}://{sub}" if port in (80, 443) else f"{scheme}://{sub}:{port}"
+                port_crawl_data = await crawl_text_content(url)
+                crawl_data.extend(port_crawl_data)
+                
+                # Dynamic Re-Scan (Nuclei, Whatweb, FFUF Dir)
+                sub_recon_output[port] = await perform_web_recon(ip, sub, port, wordlist)
+                
+            recursive_web_results[sub] = sub_recon_output
+            
+    # Include recursive outputs to analysis
+    if recursive_web_results:
+        results["recursive_subdomains"] = recursive_web_results
+        
+    # --- END RECURSIVE RECON ---
         
     analysis_text = await analyze_recon(results, crawl_data)
     
@@ -81,6 +132,16 @@ async def async_start(ip: str, domain: str, wordlist: str, sub_wordlist: str, ho
                 f.write("```json\n" + json.dumps(crawl_data, indent=2, ensure_ascii=False) + "\n```\n\n")
             else:
                 f.write("```text\nNo web data collected.\n```\n\n")
+                
+            if recursive_web_results:
+                f.write("## 4.5. Recursive Subdomain Scans\n")
+                for sub, res_dict in recursive_web_results.items():
+                    f.write(f"### Subdomain: {sub}\n")
+                    for port, port_results in res_dict.items():
+                        f.write(f"#### Port: {port}\n")
+                        for tool, output in port_results.items():
+                            f.write(f"**{tool.upper()}**:\n```text\n{output}\n```\n")
+                    f.write("\n")
                 
             f.write("## 5. Service-Specific Enumerations\n")
             service_enums = results.get("service_enumerations", {})
